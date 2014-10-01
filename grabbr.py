@@ -24,32 +24,57 @@ class WpGrabbr(object):
         self.s.headers['User-Agent']= 'Mozilla/5.0 (X11; Linux x86_64; rv:31.0) Gecko/20100101 Firefox/31.0'
         self.s.headers['Accept']= 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
         self.timer = 61
+
+        self.grabbed_additional_urls = set([])
+
+    def crawl_missing_urls(self, url, grabbed=None):
+        print "Crawling internal urls from {}".format(url)
+        if not grabbed: grabbed = self.check_url(url)
+        self.grabbed_additional_urls.add(url)
+
+        parsd = PyQuery(grabbed['raw_content'])
+        all_urls = parsd('a')
+        internal_urls = filter(lambda a: a and\
+                'category' not in a and\
+                'tag' not in a and\
+                'mywed.com.ua' in a and\
+                '#' not in a and\
+                '&' not in a and\
+                '.' not in a.split('/')[-1] and\
+                a not in self.grabbed_additional_urls,
+                [a.attrib.get('href') for a in all_urls])
+
+        grabbedurls = [self.check_url(iurl) for iurl in internal_urls]
+        for gurl in grabbedurls:
+            self.crawl_missing_urls(gurl['url'], gurl) 
+
+
         
     def grab_url(self, url):
         """docstring for parse_url"""
-        try:
-            response = self.s.get(cacheurl+url)
-            if response.status_code == 200:
-                raw_content = response.content
-                Posts.insert({'url':url, 'raw_content':raw_content})
-                print "Url saved."
-                self.loadedurls += 1
-                time.sleep(self.timer)
-            elif response.status_code == 503:
-                import ipdb; ipdb.set_trace()
-            else:
-                print "Could'nt get url"
-                print response.url
-                self.failedurls += 1
-        except Exception as e:
-            print "Failed with e:", e
+        response = self.s.get(self.cacheurl+url)
+        if response.status_code == 200:
+            raw_content = response.content
+            Posts.insert({'url':url, 'raw_content':raw_content})
+            print "Url saved."
+            self.loadedurls += 1
+            time.sleep(self.timer)
+        elif response.status_code == 503:
+            import ipdb; ipdb.set_trace()
+        else:
+            print "Could'nt get url"
+            print response.url
+            self.failedurls += 1
         return Posts.find_one({'url':url})
 
-    def parse_grabbed(self, url, item):
+    def parse_grabbed(self, url, item, datestr=u'2014-07-18T11:20:24+00:00'):
         raw_data = item['raw_content']
         parsd = PyQuery(raw_data)
-        content = parsd('div.entry-content').html()
-        title = parsd('h1.entry-title').html()
+        content_el = parsd('div.entry-content')
+        if not content_el:
+            content_el = parsd('.post-content')
+        content = content_el.html()
+        title = parsd('h1').html()
         tags = []
         for raw_tag in parsd('ul.tag-list>li>a'):
             tag = {'title':raw_tag.text,
@@ -58,13 +83,27 @@ class WpGrabbr(object):
                     )
                 }
             tags.append(tag)
-        raw_postsed_date = parsd('header .entry-meta time.entry-date')[0].attrib['datetime']
-        posted_date = datetime.datetime.strptime(raw_postsed_date[:-6],"%Y-%m-%dT%H:%M:%S")
-        raw_category = parsd('header a')[-2]
-        category = {'title':raw_category.text,
-                    'slug':urllib.pathname2url(
-                        raw_category.attrib['href'].split('/')[-1].encode('utf8')
-                    )}
+        raw_posted_date = parsd('header .entry-meta time.entry-date')
+        if raw_posted_date:
+            raw_posted_date_text = raw_posted_date[0].attrib['datetime']
+        else:
+            print "Failed to parse date!"
+            raw_posted_date_text=datestr
+        print "Setting post date: {}".format(raw_posted_date_text)
+        posted_date = datetime.datetime.strptime(raw_posted_date_text[:-6],"%Y-%m-%dT%H:%M:%S")
+        raw_category = None
+        for potential_category in parsd('a'):
+            if potential_category.attrib.get('rel'):
+                if 'tag' in potential_category.attrib.get('rel'):
+                    raw_category = potential_category
+                    break
+        if raw_category:
+            category = {'title':raw_category.text,
+                        'slug':urllib.pathname2url(
+                            raw_category.attrib['href'].split('/')[-1].encode('utf8')
+                        )}
+        else:
+            category = None
         author_raw = parsd('header vcard>a')
         author = author_raw[0].text if author_raw else None
 
@@ -79,6 +118,7 @@ class WpGrabbr(object):
             'parsed':True
         }})
         self.parsedurls += 1
+        time.sleep(1)
         return Posts.find_one({'url':url})
 
     def insert_into_wp(self, item):
@@ -112,7 +152,7 @@ class WpGrabbr(object):
                 taxonomy_id = taxonomy[0] if taxonomy else None
             else:
                 i = WpTerms.insert({'slug':tag.get('slug'),
-                    'name':tag.get('title')})
+                    'name':tag.get('title','None')})
                 res = wpdb.execute(i)
                 wptag_id = res.inserted_primary_key[0]
 
@@ -130,7 +170,8 @@ class WpGrabbr(object):
         for tag in item['tags']:
             insert_taxonomy_relation(tag, 'post_tag')
 
-        insert_taxonomy_relation(item['category'], 'category')
+        if item.get('category'):
+            insert_taxonomy_relation(item['category'], 'category')
 
 
 
@@ -142,37 +183,63 @@ class WpGrabbr(object):
         file = open(sitemapfile)
         data = xmltodict.parse(file)
         items = data['urlset']['url']
+        print "Found {} entries in sitemap".format(len(items))
         return items
 
-    def main(self):
-        print "Found {} entries in sitemap".format(len(items))
+    def check_url(self, url, datestr=None):
+        """Check url and if not loaded - grab, parse, and upload to wp.
+        if load, just return parsed item
+        """
+        print "checking {}".format(url)
+        item = Posts.find_one({'url':url})
+        if not item:
+            print "Url was not grabbed. Grabbing..."
+            try:
+                item = self.grab_url(url)
+                if not item:
+                    return
+            except Exception as e:
+                print "Failed grabbing with e:", e
+                self.failedurls += 1
+                return
+
+        if not item.get('parsed') or not item.get('content'):
+            print "Parsing item..."
+            try:
+                item = self.parse_grabbed(url, item, datestr=datestr)
+            except Exception as e:
+                print "Failed parsing with e:", e
+                self.failedurls += 1
+                return
+            print "Parsing done."
+
+        wp_post = wpdb.execute(WpPosts.select(
+                    WpPosts.c.post_name == item['slug'])).fetchone()
+        #elif not item.get('inserted') and not wp_post:
+        if not wp_post:
+            print "Inserting into wp db..."
+            try:
+                self.insert_into_wp(item)
+            except Exception as e:
+                print "Failed inserting with e:", e
+                self.failedurls += 1
+                return
+            print "Done inserting."
+        else:
+            print "Already processed"
+
+        return item
+
+
+    def parse_from_sitemap(self):
         items = self.loadsitemap(self.sitemapfile)
         for item in items:
             url = item['loc']
-            print "checking {}".format(url)
-            item = Posts.find_one({'url':url})
-            if not item:
-                print "Url was not grabbed. Grabbing..."
-                item = self.grab_url(url)
-                if not item:
-                    continue
+            datestr = item['lastmod']
+            self.check_url(url, datestr)
 
-            if not item.get('parsed'):
-                print "Parsing url..."
-                item = self.parse_grabbed(url, item)
-                print "Parsing done"
-            wp_post = wpdb.execute(WpPosts.select(
-                        WpPosts.c.post_name == item['url'])).fetchone()
-            #elif not item.get('inserted') and not wp_post:
-            elif not wp_post:
-                print "Inserting into wp db..."
-                self.insert_into_wp(item)
-                print "Done inserting."
-            else:
-                print "Already processed"
-
-            print "Done"
-            print "successfully grabbed {loadedurls}".format(self.loadedurls)
-            print "successfully parsed {parsed}".format(self.parsedurls)
-            print "successfully inserted {inserted}".format(self.insertedurls)
-            print "failed {failed} urls".format(self.failedurls)
+        print "Done"
+        print "successfully grabbed {}".format(self.loadedurls)
+        print "successfully parsed {}".format(self.parsedurls)
+        print "successfully inserted {}".format(self.insertedurls)
+        print "failed {} urls".format(self.failedurls)
