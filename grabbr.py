@@ -13,8 +13,9 @@ from sqlalchemy import and_, or_
 
 
 class WpGrabbr(object):
-    def __init__(self):
-        self.sitemapfile = 'sitemap.xml'
+    def __init__(self, sitemapfile='sitemap.xml', timer=61):
+        self.sitemapfile = sitemapfile
+        self.timer = timer
         self.cacheurl = "http://webcache.googleusercontent.com/search?q=cache:"
         self.loadedurls = 0
         self.parsedurls = 0
@@ -23,7 +24,6 @@ class WpGrabbr(object):
         self.s = requests.Session()
         self.s.headers['User-Agent']= 'Mozilla/5.0 (X11; Linux x86_64; rv:31.0) Gecko/20100101 Firefox/31.0'
         self.s.headers['Accept']= 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-        self.timer = 91
 
         self.grabbed_additional_urls = set([])
 
@@ -35,16 +35,17 @@ class WpGrabbr(object):
 
         parsd = PyQuery(grabbed['raw_content'])
         all_urls = parsd('a')
+        parenturl = url.split('/')[2]
         internal_urls = set(filter(lambda a: a and\
+                parenturl in a and\
                 'category' not in a and\
                 'author' not in a and\
                 'feed' not in a and\
                 'tag' not in a and\
-                'mywed.com.ua' in a and\
                 '#' not in a and\
                 '&' not in a and\
                 '.' not in a.split('/')[-1] and\
-                'http://mywed.com.ua/' != a and\
+                'http://'+parenturl+'/' != a and\
                 a not in self.grabbed_additional_urls,
                 [a.attrib.get('href') for a in all_urls]))
 
@@ -55,7 +56,7 @@ class WpGrabbr(object):
 
         
     def grab_url(self, url):
-        """docstring for parse_url"""
+        """Grab url into database"""
         response = self.s.get(self.cacheurl+url)
         if response.status_code == 200:
             raw_content = response.content
@@ -73,6 +74,7 @@ class WpGrabbr(object):
         return Posts.find_one({'url':url})
 
     def parse_grabbed(self, url, item, datestr=u'2014-07-18T11:20:24+00:00'):
+        """Parse grabbed item, extract title content, tags"""
         raw_data = item['raw_content']
         parsd = PyQuery(raw_data)
         content_el = parsd('div.entry-content')
@@ -127,6 +129,7 @@ class WpGrabbr(object):
         return Posts.find_one({'url':url})
 
     def insert_into_wp(self, item):
+        """Insert into wp database"""
         i = WpPosts.insert({
             'post_author':1, #TODO
             'post_date':item.get('posted_date'),
@@ -145,6 +148,7 @@ class WpGrabbr(object):
         post_id = res.inserted_primary_key[0]
 
         def insert_taxonomy_relation(tag, taxonomy_type):
+            """Helper to mange wp's tags and categories"""
             wptag = wpdb.execute(
                     WpTerms.select(
                         WpTerms.c.slug==tag['slug'])
@@ -184,7 +188,8 @@ class WpGrabbr(object):
             'inserted':True}})
         self.insertedurls += 1
 
-    def loadsitemap(self, sitemapfile):
+    def load_sitemap(self, sitemapfile):
+        """Parse sitemap"""
         file = open(sitemapfile)
         data = xmltodict.parse(file)
         items = data['urlset']['url']
@@ -220,7 +225,6 @@ class WpGrabbr(object):
 
         wp_post = wpdb.execute(WpPosts.select(
                     WpPosts.c.post_name == item['slug'])).fetchone()
-        #elif not item.get('inserted') and not wp_post:
         if not wp_post:
             print "Inserting into wp db..."
             try:
@@ -237,12 +241,16 @@ class WpGrabbr(object):
 
 
     def parse_from_sitemap(self):
-        items = self.loadsitemap(self.sitemapfile)
+        """Grab and load all urls from sitemap"""
+        items = self.load_sitemap(self.sitemapfile)
         for item in items:
             url = item['loc']
             datestr = item['lastmod']
             self.check_url(url, datestr)
 
+        self.print_finished()
+
+    def print_finished(self):
         print "Done"
         print "successfully grabbed {}".format(self.loadedurls)
         print "successfully parsed {}".format(self.parsedurls)
