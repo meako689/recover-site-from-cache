@@ -23,7 +23,7 @@ class WpGrabbr(object):
         self.s = requests.Session()
         self.s.headers['User-Agent']= 'Mozilla/5.0 (X11; Linux x86_64; rv:31.0) Gecko/20100101 Firefox/31.0'
         self.s.headers['Accept']= 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-        self.timer = 61
+        self.timer = 91
 
         self.grabbed_additional_urls = set([])
 
@@ -31,22 +31,26 @@ class WpGrabbr(object):
         print "Crawling internal urls from {}".format(url)
         if not grabbed: grabbed = self.check_url(url)
         self.grabbed_additional_urls.add(url)
+        if not grabbed: return
 
         parsd = PyQuery(grabbed['raw_content'])
         all_urls = parsd('a')
-        internal_urls = filter(lambda a: a and\
+        internal_urls = set(filter(lambda a: a and\
                 'category' not in a and\
+                'author' not in a and\
+                'feed' not in a and\
                 'tag' not in a and\
                 'mywed.com.ua' in a and\
                 '#' not in a and\
                 '&' not in a and\
                 '.' not in a.split('/')[-1] and\
+                'http://mywed.com.ua/' != a and\
                 a not in self.grabbed_additional_urls,
-                [a.attrib.get('href') for a in all_urls])
+                [a.attrib.get('href') for a in all_urls]))
 
         grabbedurls = [self.check_url(iurl) for iurl in internal_urls]
         for gurl in grabbedurls:
-            self.crawl_missing_urls(gurl['url'], gurl) 
+            if gurl and gurl.get('url'): self.crawl_missing_urls(gurl['url'], gurl) 
 
 
         
@@ -58,6 +62,7 @@ class WpGrabbr(object):
             Posts.insert({'url':url, 'raw_content':raw_content})
             print "Url saved."
             self.loadedurls += 1
+            print "Sleeping for {} seconds".format(self.timer)
             time.sleep(self.timer)
         elif response.status_code == 503:
             import ipdb; ipdb.set_trace()
