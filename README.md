@@ -9,10 +9,10 @@ requirements
 ============
 Requires basic knowledge of python and jquery-like grabbing of elements (using pyquery). Also you have to know what you're doing.
 
-Script uses mongodb to store local copies of fetched urls and connects to wordpress database locally
-You can modify those setting in db.py file
+Script uses mongodb to store local copies of fetched urls and connects to wordpress database locally.
+You can modify those setting in db.py file.
 
-Requirements are descriped in requirements.txt
+Requirements are described in requirements.txt
 
 
 usage
@@ -39,5 +39,5 @@ Arguments:
                         Url to start recursive crawling (without sitemap)
   -t TIMER, --timeout TIMER
                         Timeout between requests to google cache, to avoid
-                        being banned, default = 61s
+                        being banned, default = 61
 ```

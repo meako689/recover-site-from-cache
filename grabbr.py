@@ -4,12 +4,8 @@ import time
 import requests
 import xmltodict
 from pyquery import PyQuery
-from db import Posts,WpPosts, WpTerms, WpTermTaxonomy, WpTermRelationships, wpdb
+from db import Posts, WpPosts, WpTerms, WpTermTaxonomy, WpTermRelationships, wpdb
 from sqlalchemy import and_, or_
-
-
-
-
 
 
 class WpGrabbr(object):
@@ -24,7 +20,6 @@ class WpGrabbr(object):
         self.s = requests.Session()
         self.s.headers['User-Agent']= 'Mozilla/5.0 (X11; Linux x86_64; rv:31.0) Gecko/20100101 Firefox/31.0'
         self.s.headers['Accept']= 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-
         self.grabbed_additional_urls = set([])
 
     def crawl_missing_urls(self, url, grabbed=None):
@@ -66,7 +61,10 @@ class WpGrabbr(object):
             print "Sleeping for {} seconds".format(self.timer)
             time.sleep(self.timer)
         elif response.status_code == 503:
-            import ipdb; ipdb.set_trace()
+            print "Seems we're banned"
+            print "Sleeping for one hour to get forgiven"
+            print "You may interrupt me and kill, use ctrl+c"
+            time.sleep(61*60)
         else:
             print "Could'nt get url"
             print response.url
@@ -74,7 +72,10 @@ class WpGrabbr(object):
         return Posts.find_one({'url':url})
 
     def parse_grabbed(self, url, item, datestr=u'2014-07-18T11:20:24+00:00'):
-        """Parse grabbed item, extract title content, tags"""
+        """
+        Parse grabbed item, extract title content, tags
+        THIS IS THE METHOD YOU HAVE TO MODIFY FIRST TO GET THIS THING WORKING
+        """
         raw_data = item['raw_content']
         parsd = PyQuery(raw_data)
         content_el = parsd('div.entry-content')
@@ -130,22 +131,6 @@ class WpGrabbr(object):
 
     def insert_into_wp(self, item):
         """Insert into wp database"""
-        i = WpPosts.insert({
-            'post_author':1, #TODO
-            'post_date':item.get('posted_date'),
-            'post_date_gmt':item.get('posted_date'),
-            'post_modified':item.get('posted_date'),
-            'post_modified_gmt':item.get('posted_date'),
-            'post_content':item.get('content'),
-            'post_title':item.get('title'),
-            'post_name':item.get('slug'),
-            'post_status':'publish',
-            'comment_status':'open',
-            'ping_status':'open'
-        })
-
-        res = wpdb.execute(i)
-        post_id = res.inserted_primary_key[0]
 
         def insert_taxonomy_relation(tag, taxonomy_type):
             """Helper to mange wp's tags and categories"""
@@ -176,13 +161,28 @@ class WpGrabbr(object):
                 wpdb.execute(i)
 
 
+        i = WpPosts.insert({
+            'post_author':1, #TODO
+            'post_date':item.get('posted_date'),
+            'post_date_gmt':item.get('posted_date'),
+            'post_modified':item.get('posted_date'),
+            'post_modified_gmt':item.get('posted_date'),
+            'post_content':item.get('content'),
+            'post_title':item.get('title'),
+            'post_name':item.get('slug'),
+            'post_status':'publish',
+            'comment_status':'open',
+            'ping_status':'open'
+        })
+
+        res = wpdb.execute(i)
+        post_id = res.inserted_primary_key[0]
+
         for tag in item['tags']:
             insert_taxonomy_relation(tag, 'post_tag')
 
         if item.get('category'):
             insert_taxonomy_relation(item['category'], 'category')
-
-
 
         Posts.update({'url':item['url']},{'$set':{
             'inserted':True}})
